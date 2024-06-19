@@ -4,6 +4,7 @@ using Microsoft.Web.WebView2.Core;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -18,6 +19,8 @@ namespace Monaco;
 public sealed partial class MonacoEditor : UserControl, IMonacoEditor, IMonacoCore
 {
     private const string HTML_LAUNCH_FILE = @"monaco-editor\index.html";
+    private string _currentContent;
+   
 
     /// <summary>
     /// 
@@ -93,6 +96,52 @@ public sealed partial class MonacoEditor : UserControl, IMonacoEditor, IMonacoCo
         string content = unescapedString[1..^1].ReplaceLineEndings();
 
         return content;
+    }
+
+    #endregion
+
+    #region CursorPositionChanged Event
+    /// <summary>
+    /// Added 20240506 - MR
+    /// This event is fired when cursor position changes.
+    /// </summary>
+    public event EventHandler<CursorPositionArgs>? CursorPositionChanged;
+
+    private async void OnCursorPositionChanged()
+    {
+        string jPosition = await MonacoEditorWebView.ExecuteScriptAsync("editor.getPosition();");
+        Debug.WriteLine(jPosition);
+        EditorCursorPosition cPosition = JsonSerializer.Deserialize<EditorCursorPosition>(jPosition);
+        CursorPositionArgs args = new CursorPositionArgs(cPosition);
+        CursorPositionChanged?.Invoke(this, args);
+    }
+
+    #endregion
+
+    #region CommandPaletteEnabled Property
+
+    public static readonly DependencyProperty EditorCommandPaletteEnabledProperty = DependencyProperty.Register("CommandPaletteEnabled",
+        typeof(bool),
+        typeof(MonacoEditor),
+        new PropertyMetadata(null));
+
+    /// <summary>
+    /// Set the editor to readonly or not.
+    /// </summary>
+    public bool EditorCommandPaletteEnabled
+    {
+        get
+        {
+            object editorCommandPaletteEnabled = GetValue(EditorCommandPaletteEnabledProperty);
+            return EditorCommandPaletteEnabledProperty == null ? false : (bool)editorCommandPaletteEnabled;
+        }
+        set
+        {
+            SetValue(EditorCommandPaletteEnabledProperty, value);
+            OnPropertyChanged();
+
+            this.CommandPaletteEnabled(value);
+        }
     }
 
     #endregion
@@ -359,17 +408,20 @@ public sealed partial class MonacoEditor : UserControl, IMonacoEditor, IMonacoCo
         // load launch html file
         string monacoHtmlFile = Path.Combine(System.AppDomain.CurrentDomain.BaseDirectory, HTML_LAUNCH_FILE);
         this.MonacoEditorWebView.Source = new Uri(monacoHtmlFile);
+
+       
     }
 
     private void CoreWebView2_WebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs args)
     {
         string message = args.TryGetWebMessageAsString();
-
+        Debug.WriteLine("mess: " + message);
         this.ProcessMonacoEvents(message);
     }
 
     private void ProcessMonacoEvents(string monacoEvent)
     {
+        Debug.WriteLine(monacoEvent);
         switch (monacoEvent)
         {
             // own events
@@ -381,6 +433,11 @@ public sealed partial class MonacoEditor : UserControl, IMonacoEditor, IMonacoCo
             case "EVENT_EDITOR_CONTENT_CHANGED":
                 {
                     OnContentChanged();
+                }
+                break;
+            case "EVENT_CURSOR_MOVED":
+                {
+                    OnCursorPositionChanged();                    
                 }
                 break;
 
@@ -404,16 +461,33 @@ public sealed partial class MonacoEditor : UserControl, IMonacoEditor, IMonacoCo
     private async void WebView_NavigationCompleted(object sender, object e)
     {
         LoadCompleted = true;
+        // 20240617 MR - 
+        if (!string.IsNullOrEmpty(_currentContent))
+        {
+            await LoadContentAsync(_currentContent);
+            await SetLanguageAsync(CurrentCodeLanguage);
+        } else
+            _ = this.SetLanguageAsync(this.EditorLanguage);
         _ = this.SetThemeAsync(this.EditorTheme);
-        _ = this.SetLanguageAsync(this.EditorLanguage);
-
+       //  _ = this.SetLanguageAsync(this.EditorLanguage);
+        
+        
         await this.RegisterContentChangingEvent();
+        // 20240618 MR - new CursorPositionChanged event
+        await this.RegisterCursorPositionChangedEvent();
     }
 
     private async Task RegisterContentChangingEvent()
     {
         string javaScriptContentChangedEventHandlerWebMessage = "window.editor.getModel().onDidChangeContent((event) => { handleWebViewMessage(\"EVENT_EDITOR_CONTENT_CHANGED\"); });";
         _ = await MonacoEditorWebView.ExecuteScriptAsync(javaScriptContentChangedEventHandlerWebMessage);
+    }
+
+    private async Task RegisterCursorPositionChangedEvent()
+    {
+        string javaScriptCursorPositionChangedEventHandlerWebMessage = "window.editor.getModel().onDidChangeCursorPosition((event) => { handleWebViewMessage(\"EVENT_CURSOR_MOVED\"); });";
+        _ = await MonacoEditorWebView.ExecuteScriptAsync(javaScriptCursorPositionChangedEventHandlerWebMessage);
+        Debug.WriteLine(javaScriptCursorPositionChangedEventHandlerWebMessage);
     }
 
     #endregion
@@ -595,15 +669,41 @@ public sealed partial class MonacoEditor : UserControl, IMonacoEditor, IMonacoCo
 
     }
 
-    public Task ContextMenuEnabled(bool status=true)
+    public async Task ContextMenuEnabled(bool status=true)
     {
         string command = "";
         if (status)
             command = $"editor.updateOptions({{ contextmenu: true }});";
         else
             command = $"editor.updateOptions({{ contextmenu: false }});";
-        this.MonacoEditorWebView.ExecuteScriptAsync(command);
-        return null;
+        await this.MonacoEditorWebView.ExecuteScriptAsync(command);
+        
+    }
+
+    public async Task CommandPaletteEnabled(bool status = true)
+    {
+        string command = "";
+        _currentContent = await GetEditorContentAsync();
+        if (status)
+        {
+            MonacoEditorWebView.Reload();
+            
+        }
+        else
+        {
+            command = $"editor.addCommand(monaco.KeyCode.F1, function() {{}});";
+            await this.MonacoEditorWebView.ExecuteScriptAsync(command);
+        }
+    }
+
+    public async Task SearchBarEnabled(bool status = true)
+    {
+        string command = "";
+        if (status)
+            command = $"editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, null);";
+        else
+            command = $"editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, function(){{}});";
+        await this.MonacoEditorWebView.ExecuteScriptAsync(command);
     }
 
     /// <summary>
@@ -640,4 +740,37 @@ public sealed partial class MonacoEditor : UserControl, IMonacoEditor, IMonacoCo
         this.MonacoEditorWebView.ExecuteScriptAsync(command);
     }
 
+}
+
+public class EditorCursorPosition
+{
+    /// Added 20240618 - MR
+    /// REMARKS: Do not change members names of CurPos
+    /// because they reflect the JSON object returned
+    /// by Monaco Editor.
+    public int lineNumber { get; set; } = 0;
+    public int column { get; set; } = 0;
+}
+
+public class CursorPositionArgs : EventArgs
+{
+    /// <summary>
+    /// Added 20240618 - MR
+    /// This class allows to get the selected text through
+    /// the OntextSelected event. See usage in the TestApp project.
+    /// Monaco Editor returns cursor position as a JSON object which
+    /// gets deserialized as two numeric values.
+    /// </summary>
+    public int mLine { get; private set; }
+    public int mColumn { get; private set; }
+
+    public CursorPositionArgs(EditorCursorPosition CurPos)
+    {
+        /// Added 20240618 - MR
+        /// REMARKS: Do not change members names of CurPos
+        /// because they reflect the JSON object returned
+        /// by Monaco Editor.
+        mLine = CurPos.lineNumber;
+        mColumn = CurPos.column;
+    }
 }

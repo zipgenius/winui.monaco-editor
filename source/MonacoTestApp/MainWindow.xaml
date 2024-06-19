@@ -212,6 +212,11 @@
                                       IsChecked="False"
                                       Checked="DisableContextMenu_Checked"
                                       Unchecked="DisableContextMenu_Unchecked" />
+                            <CheckBox x:Name="DisableCommandPalette"
+                                      Content="Disable Command Palette (F1 key)"
+                                      IsChecked="False"
+                                      Checked="DisableCommandPalette_Checked"
+                                      Unchecked="DisableCommandPalette_Unchecked" />
                         </StackPanel>
 
                     </ScrollViewer>

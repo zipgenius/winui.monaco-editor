@@ -9,6 +9,7 @@ using Windows.Storage;
 using WinRT.Interop;
 using Monaco.MonacoHandler;
 using System.IO;
+using System.Diagnostics;
 
 namespace MonacoTestApp;
 
@@ -35,7 +36,12 @@ public sealed partial class MainWindow : Window
 
         // set theme
         this.ThemeSelectionComboBox.ItemsSource = _themes.Select(x => x.Key);
+        
+    }
 
+    private void MonacoEditor_CursorPositionChanged(object sender, CursorPositionArgs e)
+    {
+        LogMessage("Line: " + e.mLine.ToString() + " - Column: " + e.mColumn.ToString());
     }
 
     private void LogMessage(string message)
@@ -164,7 +170,8 @@ public sealed partial class MainWindow : Window
             }
 
             await MonacoEditor.LoadContentAsync(fileContent);
-
+            this.MonacoEditor.CursorPositionChanged += MonacoEditor_CursorPositionChanged;
+            this.MonacoEditor.EditorContentChanged += MonacoEditor_EditorContentChanged;
             /// Remarks: LoadFromFileAsync method relies on LoadContentAsync but it
             /// helps to make easier loading a file and it tries to guess what is
             /// the correct coding language to be set for a proper visualization.
@@ -195,13 +202,23 @@ public sealed partial class MainWindow : Window
         
     }
 
-    private void DisableContextMenu_Checked(object sender, RoutedEventArgs e)
+    private async void DisableContextMenu_Checked(object sender, RoutedEventArgs e)
     {
-        MonacoEditor.ContextMenuEnabled(false);
+        await MonacoEditor.ContextMenuEnabled(false);
     }
 
-    private void DisableContextMenu_Unchecked(object sender, RoutedEventArgs e)
+    private async void DisableContextMenu_Unchecked(object sender, RoutedEventArgs e)
     {
-        MonacoEditor.ContextMenuEnabled();
+        await MonacoEditor.ContextMenuEnabled(true);
+    }
+
+    private async void DisableCommandPalette_Checked(object sender, RoutedEventArgs e)
+    {
+        await MonacoEditor.CommandPaletteEnabled(false);
+    }
+
+    private async void DisableCommandPalette_Unchecked(object sender, RoutedEventArgs e)
+    {
+        await MonacoEditor.CommandPaletteEnabled(true);
     }
 }
